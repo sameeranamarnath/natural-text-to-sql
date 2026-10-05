@@ -1,42 +1,52 @@
-This generates a sql query from provided text in natural language using
-gpt3.5/4 and runs the same on a provided database uri 
-powered by python, langchain, gpt3.5/4
+# natural-text-to-sql
 
-Click the pic to see it in action:
-[![Sample of the working app:](https://github.com/sameeranamarnath/text-to-sql-langchain/assets/85400557/f1c7ecfe-07ae-4598-8773-6ec2847ff6af)](
-https://clipchamp.com/watch/RuGd8O4BnmA)
+Turn a plain-English question into SQL, run it against a database, and show the
+result - no hand-written query. Built on LangChain + GPT-3.5/4 with a Streamlit
+front end.
 
+## What it does
 
-this works with any database, i have tried
-imdb-movie.sqlite from kaggle (https://www.kaggle.com/code/priy998/imdb-sqlite/)
-uri is
-sqlite:///imdb-movie.sqlite
+- Reads the database schema and hands it to the model
+- Converts the natural-language question into SQL
+- Executes that SQL against the configured SQLAlchemy URI
+- Streamlit UI takes the question, an optional URI, and the API key
 
-I also got the omdb movies database imported into a hosted postgres db
-on Neon service [neon.tech] , the current version uses the same reference as the default uri.  (https://github.com/df7cb/omdb-postgresql was used for getting the required sql files and then imported into the db with psql command).
+## Stack
 
-uri from the neon service has the following format,note the use of pooling, sslmode and endpoint same as the domain name as mentioned in neon's doc. 
-postgresql+psycopg2://username:password@ep-floral-frog-97311990-pooler.ap-southeast-1.aws.neon.tech/omdb?sslmode=require&options=endpoint%3Dep%2Dfloral%2Dfrog%2D97311990%2Dpooler
-"
+- Python, LangChain, OpenAI (GPT-3.5/4)
+- Streamlit for the UI
+- Any SQLAlchemy-compatible database
 
- tried implementing the same using ctransformers based local quantized llama and nsql llms, but the results proved to be inaccurate and in some situations irrelevant.
+## Databases it has been run against
 
+- `imdb-movie.sqlite` (SQLite) - the Kaggle IMDB export
+- A hosted PostgreSQL (Neon) import of the OMDb dataset
+- Anything else with a SQLAlchemy URI
+
+## Setup
+
+```
 pip install -r requirements.txt --user
+```
 
-streamlit is optional, seemed good enough for getting an interface going and hosting the solution
+Create a `.env` with:
 
-in case you want to skip using openapi paid access, u can :P
-you can just use the g4f version, it will be a bit slow
-Shoutout to @xtekky for  gpt4free and @Midoribin for
-langchain-gpt4free
+```
+omdb_url=postgresql+psycopg2://<user>:<password>@<host>/omdb?sslmode=require
+OPENAI_API_KEY=your-key
+```
 
+`omdb_url` is only used when you do not paste a URI into the UI.
 
-you can access a live version by running it from
-codespaces 
+## Run
 
-
-Setup:
-pip install -r requirements.txt --user
-
-Run it:
+```
 streamlit run text-to-sql.py --server.enableCORS false --server.enableXsrfProtection false
+```
+
+## Notes
+
+- A `gpt4free` path is included as a no-key fallback; it is noticeably slower.
+- A local quantized LLaMA + NSQL attempt is also in the file tree - the output was
+  not reliable enough to use, so OpenAI stays the default.
+- Credentials come from the environment; nothing is hardcoded.
