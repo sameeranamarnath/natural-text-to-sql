@@ -15,14 +15,10 @@ from langgraph.graph import END, START, StateGraph
 from sqlalchemy import create_engine, inspect, text
 
 from config import get_settings
+from guardrails import is_read_only_sql, strip_sql_fences
 from llm import chat_model
+from observability import genai_attributes, span
 from store import search
-
-READ_ONLY_PREFIXES = ("select", "with")
-FORBIDDEN = (
-    "insert", "update", "delete", "drop", "alter", "create", "grant",
-    "revoke", "truncate", "attach", "detach", "pragma", "vacuum",
-)
 
 
 class SqlState(TypedDict, total=False):
@@ -32,25 +28,21 @@ class SqlState(TypedDict, total=False):
     error: str | None
     attempts: int
     rows: list[dict[str, Any]]
+    usage: list[dict[str, int]]
     answer: str
 
 
-def _clean(raw: str) -> str:
-    """Strip markdown fences and stray prefixes the model likes to add."""
-    s = raw.strip()
-    if s.startswith("```"):
-        parts = s.split("```")
-        s = parts[1] if len(parts) > 1 else s
-        if s.lower().startswith("sql"):
-            s = s[3:]
-    return s.strip().rstrip(";")
+def usage_of(message: Any) -> dict[str, int]:
+    """Token counts reported by the provider, when the client exposes them.
 
-
-def _is_read_only(sql: str) -> bool:
-    words = " ".join(sql.split()).lower().split()
-    if not words or words[0] not in READ_ONLY_PREFIXES:
-        return False
-    return not any(w in FORBIDDEN for w in words)
+    Returns zeros rather than guessing - an invented token count would make the
+    cost dashboard worse than useless.
+    """
+    meta = getattr(message, "usage_metadata", None) or {}
+    return {
+        "prompt_tokens": int(meta.get("input_tokens", 0)),
+        "completion_tokens": int(meta.get("output_tokens", 0)),
+    }
 
 
 def collect_schema_chunks() -> list[str]:
@@ -76,29 +68,47 @@ def draft_sql(state: SqlState) -> dict[str, Any]:
         "Reply with a single read-only SELECT statement and no commentary.\n\n"
         f"Schema:\n{context}\n\nQuestion: {state['question']}\nSQL:"
     )
-    raw = chat_model().invoke(prompt).content
-    return {"sql": _clean(str(raw)), "attempts": 0, "error": None}
+    attrs = genai_attributes(get_settings().llm_model, operation="generate_sql")
+    with span("gen_ai.chat", **attrs) as record:
+        message = chat_model().invoke(prompt)
+        record.attributes["node"] = "draft_sql"
+        tokens = usage_of(message)
+        record.attributes.update(
+            {
+                "gen_ai.usage.input_tokens": tokens["prompt_tokens"],
+                "gen_ai.usage.output_tokens": tokens["completion_tokens"],
+            }
+        )
+    return {
+        "sql": strip_sql_fences(str(message.content)),
+        "attempts": 0,
+        "error": None,
+        "usage": [*state.get("usage", []), tokens],
+    }
 
 
 def validate_sql(state: SqlState) -> dict[str, Any]:
     sql = state.get("sql", "")
     if not sql:
         return {"error": "The model returned an empty statement."}
-    if not _is_read_only(sql):
+    if not is_read_only_sql(sql):
         return {"error": "Rejected: not a single read-only SELECT/WITH statement."}
     return {"error": None}
 
 
 def run_sql(state: SqlState) -> dict[str, Any]:
     s = get_settings()
-    try:
-        engine = create_engine(s.database_url)
-        with engine.connect() as conn:
-            result = conn.execute(text(state["sql"]))
-            rows = [dict(r._mapping) for r in result.fetchmany(s.row_limit)]
-        return {"rows": rows, "error": None}
-    except Exception as exc:  # surface the database's own words to the repair step
-        return {"rows": [], "error": f"{type(exc).__name__}: {exc}"}
+    with span("db.query", db_system="sqlalchemy") as record:
+        try:
+            engine = create_engine(s.database_url)
+            with engine.connect() as conn:
+                result = conn.execute(text(state["sql"]))
+                rows = [dict(r._mapping) for r in result.fetchmany(s.row_limit)]
+            record.attributes["db.row_count"] = len(rows)
+            return {"rows": rows, "error": None}
+        except Exception as exc:  # surface the database's own words to the repair step
+            record.error = f"{type(exc).__name__}: {exc}"
+            return {"rows": [], "error": record.error}
 
 
 def repair_sql(state: SqlState) -> dict[str, Any]:
@@ -109,8 +119,19 @@ def repair_sql(state: SqlState) -> dict[str, Any]:
         f"Failing SQL:\n{state['sql']}\nDatabase error:\n{state['error']}\n"
         f"Attempt {state.get('attempts', 0) + 1}:"
     )
-    raw = chat_model(temperature=0.1).invoke(prompt).content
-    return {"sql": _clean(str(raw)), "attempts": state.get("attempts", 0) + 1, "error": None}
+    attempt = state.get("attempts", 0) + 1
+    attrs = genai_attributes(get_settings().llm_model, operation="repair_sql")
+    with span("gen_ai.chat", **attrs) as record:
+        message = chat_model(temperature=0.1).invoke(prompt)
+        record.attributes["node"] = "repair_sql"
+        record.attributes["attempt"] = attempt
+        tokens = usage_of(message)
+    return {
+        "sql": strip_sql_fences(str(message.content)),
+        "attempts": attempt,
+        "error": None,
+        "usage": [*state.get("usage", []), tokens],
+    }
 
 
 def summarise(state: SqlState) -> dict[str, Any]:
@@ -120,7 +141,15 @@ def summarise(state: SqlState) -> dict[str, Any]:
         "Answer the question in one or two sentences using only these rows.\n\n"
         f"Question: {state['question']}\nSQL: {state['sql']}\nRows: {state.get('rows', [])[:10]}"
     )
-    return {"answer": str(chat_model().invoke(prompt).content).strip()}
+    attrs = genai_attributes(get_settings().llm_model, operation="summarise")
+    with span("gen_ai.chat", **attrs) as record:
+        message = chat_model().invoke(prompt)
+        record.attributes["node"] = "summarise"
+        tokens = usage_of(message)
+    return {
+        "answer": str(message.content).strip(),
+        "usage": [*state.get("usage", []), tokens],
+    }
 
 
 def _after_validate(state: SqlState) -> Literal["run", "repair", "stop"]:

@@ -24,9 +24,7 @@ def ensure_collection() -> str:
     if not c.collection_exists(s.qdrant_collection):
         c.create_collection(
             collection_name=s.qdrant_collection,
-            vectors_config=models.VectorParams(
-                size=s.embed_dim, distance=models.Distance.COSINE
-            ),
+            vectors_config=models.VectorParams(size=s.embed_dim, distance=models.Distance.COSINE),
         )
     return s.qdrant_collection
 
@@ -39,7 +37,7 @@ def upsert_chunks(chunks: list[str], metadatas: list[dict[str, Any]]) -> int:
     start = c.count(collection_name=collection).count
     points = [
         models.PointStruct(id=start + i, vector=vec, payload={"text": text, **meta})
-        for i, (text, vec, meta) in enumerate(zip(chunks, vectors, metadatas))
+        for i, (text, vec, meta) in enumerate(zip(chunks, vectors, metadatas, strict=True))
     ]
     c.upsert(collection_name=collection, points=points)
     return len(points)
