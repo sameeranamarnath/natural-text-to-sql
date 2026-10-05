@@ -11,6 +11,7 @@ import pytest
 from guardrails import (
     is_read_only_sql,
     redact,
+    sanitise,
     screen_injection,
     strip_sql_fences,
     validate_question,
@@ -69,6 +70,12 @@ class TestRedact:
     def test_reports_each_kind_once(self) -> None:
         _, kinds = redact("a@b.com and c@d.com")
         assert kinds == ("email",)
+
+    def test_sanitise_returns_only_the_text(self) -> None:
+        assert sanitise("mail ada@example.com") == "mail [REDACTED:email]"
+
+    def test_sanitise_is_a_no_op_on_clean_text(self) -> None:
+        assert sanitise("how many films?") == "how many films?"
 
 
 class TestScreenInjection:

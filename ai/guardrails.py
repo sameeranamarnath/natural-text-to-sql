@@ -90,6 +90,11 @@ def redact(text: str) -> tuple[str, tuple[str, ...]]:
     return out, tuple(dict.fromkeys(found))
 
 
+def sanitise(text: str) -> str:
+    """Redact in one call, for the common case where only the cleaned text is wanted."""
+    return redact(text)[0]
+
+
 def screen_injection(text: str) -> Result:
     """Flag prompt-injection shaped input.
 
