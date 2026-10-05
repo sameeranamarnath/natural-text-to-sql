@@ -1,4 +1,4 @@
-#text-to-sql using langchain, g4f
+﻿#text-to-sql using langchain, g4f
 #Amar nov25 
 
 import streamlit as st
@@ -36,7 +36,7 @@ def generate_response(openai_api_key,input_text,database_uri,use_free_version):
      if not database_uri:
       existingConnector =  os.environ["omdb_url"]
       #sample format: postgresql+psycopg2://username:password@ep-floral-frog-97311990-pooler.ap-southeast-1.aws.neon.tech/omdb?sslmode=require&options=endpoint%3Dep%2Dfloral%2Dfrog%2D97311990%2Dpooler
-      db = SQLDatabase.from_uri(f"postgresql+psycopg2://sameeranamarnath:P6UClH5XpDdr@ep-floral-frog-97311990-pooler.ap-southeast-1.aws.neon.tech/omdb?sslmode=require&options=endpoint%3Dep%2Dfloral%2Dfrog%2D97311990%2Dpooler")
+      db = SQLDatabase.from_uri(existingConnector)
      else:
       db = SQLDatabase.from_uri(database_uri)
      if not use_free_version:
@@ -80,6 +80,6 @@ with st.form('data_form'):
   st.text("another sample database to try  is:  sqlite:///imdb-movie.sqlite    which is stored locally")
   submitted = st.form_submit_button('Submit')
   #if not openai_api_key.startswith('sk-'):
-  #st.warning('Please enter your OpenAI API key!', icon='⚠')
+  #st.warning('Please enter your OpenAI API key!', icon='âš ')
   if submitted:
    generate_response(openai_api_key,question,database_uri,use_free_version)
