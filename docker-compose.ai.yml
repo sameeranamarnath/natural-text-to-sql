@@ -1,0 +1,74 @@
+# Agent stack: vLLM (chat + embeddings) + Qdrant + the SQL agent service.
+#
+#   docker compose -f docker-compose.ai.yml up
+#
+# vLLM needs a GPU. On a CPU-only box, swap the vllm service for a hosted
+# OpenAI-compatible endpoint by setting LLM_BASE_URL / EMBED_BASE_URL instead.
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  vllm:
+    image: vllm/vllm-openai:latest
+    command:
+      - --model
+      - Qwen/Qwen3-32B
+      - --served-model-name
+      - Qwen/Qwen3-32B
+      - --max-model-len
+      - "8192"
+    environment:
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
+    ports:
+      - "8000:8000"
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # Separate small instance for embeddings so chat traffic is not blocked by
+  # bulk embedding jobs.
+  vllm-embed:
+    image: vllm/vllm-openai:latest
+    command:
+      - --model
+      - BAAI/bge-m3
+      - --task
+      - embed
+      - --port
+      - "8000"
+    ports:
+      - "8001:8000"
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+
+  agent:
+    build: ./ai
+    environment:
+      LLM_BASE_URL: http://vllm:8000/v1
+      LLM_MODEL: Qwen/Qwen3-32B
+      EMBED_BASE_URL: http://vllm-embed:8000/v1
+      EMBED_MODEL: BAAI/bge-m3
+      QDRANT_URL: http://qdrant:6333
+      DATABASE_URL: ${DATABASE_URL:-sqlite:///data/imdb-movie.sqlite}
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./:/data
+    depends_on:
+      - qdrant
+      - vllm
+      - vllm-embed
+
+volumes:
+  qdrant_data:
+  hf_cache:

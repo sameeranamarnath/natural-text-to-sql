@@ -50,3 +50,27 @@ streamlit run text-to-sql.py --server.enableCORS false --server.enableXsrfProtec
 - A local quantized LLaMA + NSQL attempt is also in the file tree - the output was
   not reliable enough to use, so OpenAI stays the default.
 - Credentials come from the environment; nothing is hardcoded.
+
+## Agent service (`ai/`)
+
+`text-to-sql.py` is the original single-shot version. `ai/` reimplements the same
+job as a LangGraph agent with a self-correcting loop:
+
+```
+retrieve_schema -> draft_sql -> validate_sql --> run_sql --> summarise -> END
+                                     |               |
+                                     +--> repair_sql <+
+                                        (capped retries)
+```
+
+- **Retrieval** - schema chunks live in Qdrant, so only the relevant tables reach the prompt
+- **Models** - vLLM serving an OpenAI-compatible API (`Qwen/Qwen3-32B` for chat, `BAAI/bge-m3` for embeddings)
+- **Guard** - only a single read-only `SELECT`/`WITH` statement is allowed through
+- **Repair** - a failed query is fed back with the database's own error message, up to `MAX_REPAIR_ATTEMPTS`
+
+```
+docker compose -f docker-compose.ai.yml up
+```
+
+`POST /ingest` loads the schema, `POST /ask` returns answer + SQL + rows, and
+`POST /ask/stream` emits one SSE event per graph node. See [`ai/README.md`](ai/README.md).
